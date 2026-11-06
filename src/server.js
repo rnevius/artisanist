@@ -1,6 +1,9 @@
 import { createApp } from './app.js';
 
-const app = createApp({ logger: true });
+const app = createApp({
+  logger: true,
+  trustProxy: process.env.TRUST_PROXY === 'loopback' ? 'loopback' : false,
+});
 const close = async () => {
   await app.close();
 };

@@ -30,3 +30,12 @@ Tests use isolated databases. Refresh the browser after front-end edits.
 To back up or restore, stop the server, copy or replace `data/recipes.sqlite`, then restart.
 
 Add schema changes as new SQL files in `migrations/`; never edit applied migrations. Back up before schema changes. Migrations run at startup or with `npm run db:migrate`.
+
+## Deployment
+
+Copy `.env.deploy.example` to `.env.deploy` and set `DEPLOY_HOST`.
+
+```sh
+mise exec -- npm run deploy:setup  # First deployment or service changes
+mise exec -- npm run deploy        # Subsequent deployments
+```

@@ -1,0 +1,11 @@
+# Replace the hostname, username, and hash before adding this block to Caddy.
+# Generate the password hash interactively on the server: caddy hash-password
+# Before Caddy 2.8, use "basicauth" instead of "basic_auth".
+recipes.example.com {
+	basic_auth {
+		user REPLACE_WITH_PASSWORD_HASH
+	}
+	reverse_proxy 127.0.0.1:3000 {
+		header_up -Authorization
+	}
+}

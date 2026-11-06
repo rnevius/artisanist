@@ -1,0 +1,37 @@
+[Unit]
+Description=Artisanist recipe notebook
+After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=exec
+User=artisanist
+Group=artisanist
+WorkingDirectory=/opt/artisanist/current
+ExecStart=/opt/artisanist/current/runtime/bin/node src/server.js
+Environment=NODE_ENV=production
+Environment=HOST=127.0.0.1
+Environment=PORT=3000
+Environment=DATABASE_PATH=/var/lib/artisanist/recipes.sqlite
+Environment=TRUST_PROXY=loopback
+StateDirectory=artisanist
+StateDirectoryMode=0700
+UMask=0077
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+MemoryMax=256M
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

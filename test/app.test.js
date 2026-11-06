@@ -369,6 +369,57 @@ test('rejects cross-origin writes while same-origin writes work', async (t) => {
   assert.equal(allowed.statusCode, 201, allowed.body);
 });
 
+test('HTTPS writes work through the local proxy and reject other origins', async (t) => {
+  const app = createApp({ databasePath: ':memory:', trustProxy: 'loopback' });
+  t.after(() => app.close());
+  const request = {
+    method: 'POST',
+    url: '/api/recipes',
+    remoteAddress: '127.0.0.1',
+    payload: exampleRecipe(),
+    headers: {
+      host: 'recipes.example.com',
+      origin: 'https://recipes.example.com',
+      'x-forwarded-proto': 'https',
+    },
+  };
+  const allowed = await app.inject(request);
+  assert.equal(allowed.statusCode, 201, allowed.body);
+  const blocked = await app.inject({
+    ...request,
+    headers: { ...request.headers, origin: 'https://other.example.com' },
+  });
+  assert.equal(blocked.statusCode, 403);
+  const spoofed = await app.inject({
+    ...request,
+    remoteAddress: '203.0.113.10',
+  });
+  assert.equal(spoofed.statusCode, 403);
+});
+
+test('forwarded HTTPS headers are ignored without proxy trust', async (t) => {
+  const app = await setup(t);
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/recipes',
+    payload: exampleRecipe(),
+    headers: {
+      host: 'recipes.example.com',
+      origin: 'https://recipes.example.com',
+      'x-forwarded-proto': 'https',
+    },
+  });
+  assert.equal(response.statusCode, 403);
+});
+
+test('health endpoint responds after database initialization without listing recipes', async (t) => {
+  const app = await setup(t);
+  await create(app);
+  const response = await app.inject('/health');
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(response.json(), { status: 'ok' });
+});
+
 test('blank optional metadata and stages with no ingredients are supported', async (t) => {
   const app = await setup(t);
   const payload = {

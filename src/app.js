@@ -4,9 +4,14 @@ import { openDatabase, recipeStore } from './db.js';
 import { recipeSchema, scaleByReference, validateRecipe } from './recipe.js';
 import { card, editor, errorPage, library } from './views.js';
 
-export function createApp({ databasePath, logger = false } = {}) {
+export function createApp({
+  databasePath,
+  logger = false,
+  trustProxy = false,
+} = {}) {
   const app = Fastify({
     logger,
+    trustProxy,
     bodyLimit: 1024 * 1024,
     ajv: { customOptions: { removeAdditional: false, coerceTypes: false } },
   });
@@ -83,6 +88,10 @@ export function createApp({ databasePath, logger = false } = {}) {
     return true;
   };
 
+  app.get('/health', async () => {
+    db.prepare('SELECT 1').get();
+    return { status: 'ok' };
+  });
   app.get('/', async (_request, reply) => html(reply, library(store.list())));
   app.get('/recipes/new', async (_request, reply) =>
     html(reply, editor(null, store.list())),
