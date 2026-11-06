@@ -6,43 +6,37 @@ mode=$1
 upload=$2
 base=/opt/artisanist
 data=/var/lib/artisanist
-backups=/var/backups/artisanist
-stopped=false
-switched=false
-was_active=false
-backup=
-
-[[ $EUID -eq 0 ]] || { echo 'Deploy using a root SSH account.' >&2; exit 1; }
-for command in curl tar xz sha256sum flock systemctl; do command -v "$command" >/dev/null; done
-exec 9>/run/lock/artisanist-deploy.lock
-flock -n 9 || { echo 'Another Artisanist deployment is running.' >&2; exit 1; }
-
-finish() {
-  status=$?
-  if [[ $status -ne 0 ]]; then
-    if [[ $switched == true ]]; then
-      systemctl stop artisanist.service || true
-      echo "Deployment failed; Artisanist is stopped. Database backup: $backup" >&2
-      echo 'Inspect journalctl -u artisanist.service before recovery; code rollback does not undo migrations.' >&2
-    elif [[ $stopped == true && $was_active == true ]]; then
-      systemctl start artisanist.service || true
-    fi
-  fi
-}
-trap finish EXIT
+for command in curl tar xz sha256sum flock sudo; do command -v "$command" >/dev/null; done
 
 if [[ $mode == setup ]]; then
+  [[ $EUID -eq 0 ]] || { echo 'Setup requires root.' >&2; exit 1; }
   if ! id artisanist >/dev/null 2>&1; then
     useradd --system --user-group --home-dir "$data" --shell /usr/sbin/nologin artisanist
   fi
+  if ! id artisanist-deploy >/dev/null 2>&1; then
+    useradd --system --user-group --create-home --home-dir /home/artisanist-deploy --shell /bin/bash artisanist-deploy
+  fi
   install -d -m 755 "$base" "$base/releases" "$base/runtimes"
+  chown -R artisanist-deploy:artisanist-deploy "$base/releases" "$base/runtimes"
   install -d -m 700 -o artisanist -g artisanist "$data"
-  install -d -m 700 "$backups"
-else
-  id artisanist >/dev/null
-  systemctl cat artisanist.service >/dev/null
-  [[ -d $data && -d $backups ]]
+  install -d -m 700 /var/backups/artisanist
+  tar --no-same-owner --no-same-permissions -xzf "$upload/release.tar.gz" -C "$upload" \
+    deploy/artisanist.service deploy/activate.sh deploy/remote.sh
+  install -o root -g root -m 755 "$upload/deploy/activate.sh" /usr/local/sbin/artisanist-activate
+  install -o root -g root -m 644 "$upload/deploy/artisanist.service" /etc/systemd/system/artisanist.service
+  echo 'artisanist-deploy ALL=(root) NOPASSWD: /usr/local/sbin/artisanist-activate' > "$upload/sudoers"
+  visudo -cf "$upload/sudoers"
+  install -o root -g root -m 440 "$upload/sudoers" /etc/sudoers.d/artisanist
+  systemctl daemon-reload
+  systemctl enable artisanist.service
+  chown -R artisanist-deploy:artisanist-deploy "$upload"
+  exec runuser -u artisanist-deploy -- bash "$upload/deploy/remote.sh" deploy "$upload"
 fi
+[[ $mode == deploy && $(id -un) == artisanist-deploy ]] || {
+  echo 'Deploy using the artisanist-deploy SSH account.' >&2; exit 1;
+}
+exec 9>"$base/releases/.deploy.lock"
+flock -n 9 || { echo 'Another Artisanist deployment is running.' >&2; exit 1; }
 
 release=$(mktemp -d "$base/releases/$(date -u +%Y%m%dT%H%M%SZ).XXXXXXXX")
 chmod 755 "$release"
@@ -69,39 +63,8 @@ if [[ ! -x $runtime/bin/node ]]; then
 fi
 ln -s "$runtime" "$release/runtime"
 cd "$release"
-# Dependencies are pure JavaScript; never execute package lifecycle scripts as root.
+# Build as the deploy user, with package lifecycle scripts disabled.
 "$runtime/bin/node" "$runtime/lib/node_modules/npm/bin/npm-cli.js" ci \
   --omit=dev --ignore-scripts --no-audit --no-fund --cache "$upload/npm-cache"
 
-if [[ $mode == setup ]]; then
-  install -m 644 deploy/artisanist.service /etc/systemd/system/artisanist.service
-  systemctl daemon-reload
-  systemctl enable artisanist.service
-fi
-if systemctl is-active --quiet artisanist.service; then was_active=true; fi
-systemctl stop artisanist.service
-stopped=true
-backup="$backups/$(basename "$release")"
-install -d -m 700 "$backup" "$backup/database"
-# Preserve the entire stopped database directory, including any WAL/SHM files.
-cp -a "$data/." "$backup/database/"
-if [[ -L $base/current ]]; then
-  readlink "$base/current" > "$backup/release"
-  ln -sfn "$(readlink "$base/current")" "$base/previous"
-fi
-ln -sfn "$release" "$base/.current-next"
-switched=true
-mv -Tf "$base/.current-next" "$base/current"
-systemctl reset-failed artisanist.service
-systemctl start artisanist.service
-for attempt in {1..30}; do
-  if systemctl is-active --quiet artisanist.service && \
-    [[ $(curl -fs --max-time 2 http://127.0.0.1:3000/health) == '{"status":"ok"}' ]]; then
-    echo "Deployed $release"
-    echo "Pre-deployment database backup: $backup"
-    exit 0
-  fi
-  sleep 1
-done
-echo 'Artisanist did not become healthy within 30 checks.' >&2
-exit 1
+sudo -n /usr/local/sbin/artisanist-activate "$release"

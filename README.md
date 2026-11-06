@@ -33,9 +33,9 @@ Add schema changes as new SQL files in `migrations/`; never edit applied migrati
 
 ## Deployment
 
-Copy `.env.deploy.example` to `.env.deploy` and set `DEPLOY_HOST`.
+Configure `deploy/Caddyfile.example` and `.env.deploy` from `.env.deploy.example`.
 
 ```sh
 mise exec -- npm run deploy:setup  # First deployment or service changes
-mise exec -- npm run deploy        # Subsequent deployments
+mise exec -- npm run deploy
 ```

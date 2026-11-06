@@ -4,14 +4,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadEnvFile } from 'node:process';
+import { checkAuthentication } from './deploy-auth.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const args = process.argv.slice(2);
 if (args.includes('--help')) {
   console.log(
     'Usage: npm run deploy[:setup]\n' +
-      'Deploys to DEPLOY_HOST from the environment or local .env.deploy over SSH as root.\n' +
-      'Runs local checks first. --setup also installs the user and systemd service.',
+      'DEPLOY_HOST is the server hostname or SSH alias.\n' +
+      'Requires DEPLOY_URL for HTTPS authentication checks.\n' +
+      'Connects as artisanist-deploy; --setup connects as root.',
   );
   process.exit(0);
 }
@@ -22,6 +24,7 @@ try {
 } catch (error) {
   if (error.code !== 'ENOENT') throw error;
 }
+const setup = args.includes('--setup');
 const host = process.env.DEPLOY_HOST;
 if (!host) {
   console.error(
@@ -31,6 +34,7 @@ if (!host) {
 }
 if (!/^[a-zA-Z0-9][a-zA-Z0-9_.@-]*$/.test(host))
   throw new Error('DEPLOY_HOST must be an SSH alias or user@hostname.');
+const destination = `${setup ? 'root' : 'artisanist-deploy'}@${host.replace(/^.*@/, '')}`;
 const sshOptions = [
   '-o',
   'BatchMode=yes',
@@ -52,13 +56,16 @@ function run(command, parameters, options = {}) {
   return result.stdout?.toString().trim();
 }
 const ssh = (command, options) =>
-  run('ssh', [...sshOptions, host, command], options);
+  run('ssh', [...sshOptions, destination, command], options);
+const url = process.env.DEPLOY_URL;
+if (!url) throw new Error('Set DEPLOY_URL to the public HTTPS origin.');
 
 let localDirectory;
 let remoteDirectory;
 try {
   run('npm', ['run', 'check']);
   run('npm', ['run', 'test:e2e']);
+  await checkAuthentication(url);
   localDirectory = mkdtempSync(join(tmpdir(), 'artisanist-deploy-'));
   const archive = join(localDirectory, 'release.tar.gz');
   // Explicit inputs keep .env, local recipes, and development files off the server.
@@ -72,6 +79,7 @@ try {
     'public',
     'migrations',
     'deploy/artisanist.service',
+    'deploy/activate.sh',
     'deploy/Caddyfile.example',
     'deploy/remote.sh',
   ]);
@@ -85,15 +93,27 @@ try {
   run('scp', [
     ...sshOptions,
     archive,
-    `${host}:${remoteDirectory}/release.tar.gz`,
+    `${destination}:${remoteDirectory}/release.tar.gz`,
   ]);
   ssh(
-    `bash -s -- ${quote(args.includes('--setup') ? 'setup' : 'deploy')} ${quote(remoteDirectory)}`,
+    `bash -s -- ${quote(setup ? 'setup' : 'deploy')} ${quote(remoteDirectory)}`,
     {
       input: readFileSync(join(root, 'deploy/remote.sh')),
       stdio: ['pipe', 'inherit', 'inherit'],
     },
   );
+  try {
+    await checkAuthentication(url);
+  } catch (error) {
+    try {
+      ssh('sudo -n /usr/local/sbin/artisanist-activate stop');
+    } catch {
+      console.error(
+        'Could not stop Artisanist after authentication check failed.',
+      );
+    }
+    throw error;
+  }
 } catch (error) {
   console.error(error.message);
   process.exitCode = 1;
